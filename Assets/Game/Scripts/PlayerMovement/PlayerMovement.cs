@@ -135,7 +135,7 @@ public class PlayerMovement : MonoBehaviour
         }
 
         Vector3 movementVelocity = movedir;
-        playerRigidBody.velocity = movementVelocity;
+        playerRigidBody.linearVelocity = movementVelocity;
     }
 
     void HandleRotation()
@@ -221,7 +221,7 @@ public class PlayerMovement : MonoBehaviour
             float jumpingVelocity = Mathf.Sqrt(-2 * gravityIntensity * jumpHeight);
             Vector3 playerVelocity = movedir;
             playerVelocity.y = jumpingVelocity;
-            playerRigidBody.velocity = playerVelocity;
+            playerRigidBody.linearVelocity = playerVelocity;
 
             isJumping = false;
         }
