@@ -1,22 +1,22 @@
-using System.Collections;
-using System.Collections.Generic;
+
 using UnityEngine;
 using Photon.Pun;
 
 public class ShootingController : MonoBehaviour
 {
-    Animator animator;
-    InputManager inputManager;
-    PlayerManager playerManager;
-    PlayerMovement playerMovement;
+    private Animator animator;
+    private InputManager inputManager;
+    private PlayerMovement playerMovement;
+    private PhotonView view;
 
     public Transform firePoint;
 
     [Header("Shooting Variables")]
-    public float fireRate = 0f;
+    public float fireRate = 5f;
     public float fireRange = 100f;
     public float fireDamage = 15f;
-    private float nextFireTime = 0f;
+
+    private float nextFireTime;
 
     [Header("Reloading")]
     public int maxAmmo = 30;
@@ -28,7 +28,7 @@ public class ShootingController : MonoBehaviour
     public bool isShooting;
     public bool isWalking;
     public bool isShootingInput;
-    public bool isReloading = false;
+    public bool isReloading;
     public bool isScopeInput;
 
     [Header("Sound Effects")]
@@ -40,24 +40,27 @@ public class ShootingController : MonoBehaviour
     public ParticleSystem muzzleFlash;
     public ParticleSystem bloodEffect;
 
-    PhotonView view;
-
     public int playerTeam;
 
-    void Start()
+    private bool invalidFireRateWarningShown;
+
+    private void Awake()
     {
         view = GetComponent<PhotonView>();
         animator = GetComponent<Animator>();
         inputManager = GetComponent<InputManager>();
-        playerManager = GetComponent<PlayerManager>();
         playerMovement = GetComponent<PlayerMovement>();
-        currentAmmo = maxAmmo;
+    }
 
-        if (view.Owner.CustomProperties.ContainsKey("Team"))
+    private void Start()
+    {
+        if (view.Owner != null &&
+            view.Owner.CustomProperties.TryGetValue("Team", out object teamValue))
         {
-            int team = (int)view.Owner.CustomProperties["Team"];
-            playerTeam = team;
+            playerTeam = (int)teamValue;
         }
+
+        currentAmmo = maxAmmo;
     }
 
     private void Update()
@@ -65,13 +68,9 @@ public class ShootingController : MonoBehaviour
         if (!view.IsMine)
             return;
 
-        RectTransform rectTransform = playerMovement.healthAndCrosshair.GetComponent<RectTransform>();
-        Debug.Log("Crosshair Height in Update: " + rectTransform.rect.height);
-        if (isReloading || playerMovement.isSprinting)
+        if (isReloading)
         {
-            animator.SetBool("Shoot", false);
-            animator.SetBool("ShootingMovement", false);
-            animator.SetBool("ShootWalk", false);
+            SetShootingAnimations(false, false, false);
             return;
         }
 
@@ -79,116 +78,167 @@ public class ShootingController : MonoBehaviour
         isShootingInput = inputManager.fireInput;
         isScopeInput = inputManager.scopeInput;
 
-        if (totalAmmo == 0)
+        if (fireRate <= 0f)
         {
-            isShootingInput = false;
+            if (!invalidFireRateWarningShown)
+            {
+                Debug.LogWarning("ShootingController: Fire Rate must be greater than zero.");
+                invalidFireRateWarningShown = true;
+            }
+
+            return;
         }
 
-        if (isShootingInput && isWalking)
+        if (playerMovement.isSprinting)
+        {
+            SetShootingAnimations(false, false, false);
+            isShooting = false;
+            return;
+        }
+
+        if (isShootingInput)
         {
             if (Time.time >= nextFireTime)
             {
-                nextFireTime = Time.time + 1f / fireRate;
-                Shoot();
-                animator.SetBool("ShootWalk", true);
-            }
-
-            animator.SetBool("Shoot", false);
-            animator.SetBool("ShootingMovement", true);
-            isShooting = true;
-        }
-        else if (isShootingInput)
-        {
-            if (Time.time >= nextFireTime)
-            {
-                nextFireTime = Time.time + 1f / fireRate;
+                nextFireTime = Time.time + (1f / fireRate);
                 Shoot();
             }
 
-            animator.SetBool("Shoot", true);
-            animator.SetBool("ShootingMovement", false);
-            animator.SetBool("ShootWalk", false);
+            if (isWalking)
+                SetShootingAnimations(false, true, true);
+            else
+                SetShootingAnimations(true, false, false);
+
             isShooting = true;
         }
         else if (isScopeInput)
         {
-            animator.SetBool("Shoot", false);
-            animator.SetBool("ShootingMovement", true);
-            animator.SetBool("ShootWalk", false);
+            SetShootingAnimations(false, true, false);
             isShooting = false;
         }
         else
         {
-            animator.SetBool("Shoot", false);
-            animator.SetBool("ShootingMovement", false);
-            animator.SetBool("ShootWalk", false);
+            SetShootingAnimations(false, false, false);
             isShooting = false;
         }
 
         if (inputManager.reloadInput && currentAmmo < maxAmmo)
-        {
             Reload();
-        }
     }
 
-    void Shoot()
+    private void SetShootingAnimations(bool shoot, bool shootingMovement, bool shootWalk)
     {
-        if (currentAmmo > 0)
+        animator.SetBool("Shoot", shoot);
+        animator.SetBool("ShootingMovement", shootingMovement);
+        animator.SetBool("ShootWalk", shootWalk);
+    }
+
+    private void Shoot()
+    {
+        if (currentAmmo <= 0)
         {
-            RaycastHit hit;
-            if (Physics.Raycast(firePoint.position, firePoint.forward, out hit, fireRange))
+            if (totalAmmo > 0)
+                Reload();
+
+            return;
+        }
+
+        if (firePoint == null)
+        {
+            Debug.LogError("ShootingController: Fire Point is not assigned.");
+            return;
+        }
+
+        RaycastHit hit;
+
+        if (Physics.Raycast(
+            firePoint.position,
+            firePoint.forward,
+            out hit,
+            fireRange,
+            Physics.DefaultRaycastLayers,
+            QueryTriggerInteraction.Ignore))
+        {
+            PlayerMovement targetPlayer =
+                hit.collider.GetComponentInParent<PlayerMovement>();
+
+            if (targetPlayer != null &&
+                targetPlayer.playerTeam != playerTeam)
             {
-                Debug.Log(hit.transform.name);
+                targetPlayer.ApplyDamage(fireDamage);
 
-                Vector3 hitPoint = hit.point;
-                Vector3 hitNormal = hit.normal;
-
-                PlayerMovement playerMovementDamage = hit.collider.GetComponent<PlayerMovement>();
-                if (playerMovementDamage != null && playerMovementDamage.playerTeam != playerTeam)
-                {
-                    playerMovementDamage.ApplyDamage(fireDamage);
-                    view.RPC("RPC_Shoot", RpcTarget.All, hitPoint, hitNormal);
-                }
+                view.RPC(
+                    "RPC_Shoot",
+                    RpcTarget.All,
+                    hit.point,
+                    hit.normal
+                );
             }
+        }
 
+        if (muzzleFlash != null)
             muzzleFlash.Play();
+
+        if (soundAudioSource != null && shootingSoundClip != null)
             soundAudioSource.PlayOneShot(shootingSoundClip);
-            currentAmmo--;
-        }
-        else if (totalAmmo > 0)
-        {
+
+        currentAmmo--;
+
+        if (currentAmmo <= 0 && totalAmmo > 0)
             Reload();
-        }
     }
 
     [PunRPC]
-    void RPC_Shoot(Vector3 hitPoint, Vector3 hitNormal)
+    private void RPC_Shoot(Vector3 hitPoint, Vector3 hitNormal)
     {
-        ParticleSystem blood = Instantiate(bloodEffect, hitPoint, Quaternion.LookRotation(hitNormal));
+        if (bloodEffect == null)
+            return;
+
+        ParticleSystem blood = Instantiate(
+            bloodEffect,
+            hitPoint,
+            Quaternion.LookRotation(hitNormal)
+        );
+
         Destroy(blood.gameObject, blood.main.duration);
     }
 
-    void Reload()
+    private void Reload()
     {
-        if (!isReloading && currentAmmo < maxAmmo && totalAmmo > 0)
-        {
-            animator.SetTrigger(isShootingInput && isWalking ? "ShootReload" : "Reload");
-            isReloading = true;
+        if (isReloading || currentAmmo >= maxAmmo || totalAmmo <= 0)
+            return;
+
+        isReloading = true;
+
+        animator.SetTrigger(
+            isShootingInput && isWalking ? "ShootReload" : "Reload"
+        );
+
+        if (soundAudioSource != null && reloadingSoundClip != null)
             soundAudioSource.PlayOneShot(reloadingSoundClip);
-            Invoke("FinishReloading", reloadTime);
-        }
+
+        Invoke(nameof(FinishReloading), reloadTime);
     }
 
-    void FinishReloading()
+    private void FinishReloading()
     {
-        if (totalAmmo > 0)
-        {
-            int ammoToReload = Mathf.Min(maxAmmo - currentAmmo, totalAmmo);
-            currentAmmo += ammoToReload;
-            totalAmmo -= ammoToReload;
-            isReloading = false;
-            animator.ResetTrigger("ShootReload");
-            animator.ResetTrigger("Reload");
-        }
+        int ammoToReload = Mathf.Min(
+            maxAmmo - currentAmmo,
+            totalAmmo
+        );
+
+        currentAmmo += ammoToReload;
+        totalAmmo -= ammoToReload;
+
+        isReloading = false;
+
+        animator.ResetTrigger("ShootReload");
+        animator.ResetTrigger("Reload");
+    }
+
+    private void OnDisable()
+    {
+        CancelInvoke(nameof(FinishReloading));
+        isReloading = false;
     }
 }
