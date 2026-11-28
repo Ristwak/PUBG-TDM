@@ -1,17 +1,18 @@
-using System.Collections;
-using System.Collections.Generic;
+
 using UnityEngine;
 using Photon.Pun;
 
 public class PlayerManager : MonoBehaviour
 {
-    InputManager inputManager;
-    PlayerMovement playerMovement;
-    CameraManager cameraManager;
-    Animator animator;
+    private InputManager inputManager;
+    private PlayerMovement playerMovement;
+    private CameraManager cameraManager;
+    private Animator animator;
+    private PhotonView view;
+
     public bool isInteracting;
 
-    PhotonView view;
+    public CameraManager CameraManager => cameraManager;
 
     private void Awake()
     {
@@ -19,39 +20,59 @@ public class PlayerManager : MonoBehaviour
         animator = GetComponent<Animator>();
         inputManager = GetComponent<InputManager>();
         playerMovement = GetComponent<PlayerMovement>();
-        cameraManager = FindObjectOfType<CameraManager>();
+
+        cameraManager = GetComponentInChildren<CameraManager>(true);
     }
 
-    void Start()
+    private void Start()
     {
-        if(!view.IsMine)
+        if (!view.IsMine)
         {
-            Destroy(GetComponentInChildren<CameraManager>().gameObject);
+            if (cameraManager != null)
+                Destroy(cameraManager.gameObject);
+
+            return;
         }
+
+        if (cameraManager == null)
+            Debug.LogError("Local player has no CameraManager child.");
     }
-    
+
     private void Update()
     {
         if (!view.IsMine)
             return;
-        inputManager.HandleAllInputs();
+
+        if (inputManager != null)
+            inputManager.HandleAllInputs();
     }
 
     private void FixedUpdate()
     {
         if (!view.IsMine)
             return;
-        playerMovement.HandleAllMovement();
+
+        if (playerMovement != null)
+            playerMovement.HandleAllMovement();
     }
 
     private void LateUpdate()
     {
         if (!view.IsMine)
             return;
-        cameraManager.HandleAllCameraMovement();
 
-        isInteracting = animator.GetBool("isInteracting");
-        playerMovement.isJumping = animator.GetBool("isJumping");
-        animator.SetBool("isGrounded", playerMovement.isGrounded);
+        if (cameraManager != null)
+            cameraManager.HandleAllCameraMovement();
+
+        if (animator != null)
+        {
+            isInteracting = animator.GetBool("isInteracting");
+
+            if (playerMovement != null)
+            {
+                playerMovement.isJumping = animator.GetBool("isJumping");
+                animator.SetBool("isGrounded", playerMovement.isGrounded);
+            }
+        }
     }
 }

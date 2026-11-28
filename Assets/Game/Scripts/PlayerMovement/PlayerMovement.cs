@@ -1,5 +1,4 @@
-using System.Collections;
-using System.Collections.Generic;
+
 using UnityEngine;
 using Photon.Pun;
 using UnityEngine.UI;
@@ -7,7 +6,8 @@ using UnityEngine.UI;
 public class PlayerMovement : MonoBehaviour
 {
     [Header("Player Health")]
-    const float maxHealth = 150f;
+    private const float maxHealth = 150f;
+
     public float currentHealth;
     public Slider healthbarSlider;
     public GameObject playerUI;
@@ -15,19 +15,22 @@ public class PlayerMovement : MonoBehaviour
     public GameObject crossHairUI;
 
     [Header("Refs & Physics")]
-    PlayerControllerManager playerControllerManager;
-    AnimatorManager animatorManager;
-    InputManager inputManager;
-    PlayerManager playerManager;
-    Vector3 movedir;
-    Transform cameraGameObject;
-    Rigidbody playerRigidBody;
+    private PlayerControllerManager playerControllerManager;
+    private AnimatorManager animatorManager;
+    private InputManager inputManager;
+    private PlayerManager playerManager;
+
+    private Vector3 movedir;
+    private Transform cameraGameObject;
+    private Rigidbody playerRigidBody;
+    private PhotonView view;
 
     [Header("Falling And Landing")]
     public float inAirTimer;
     public float leapingVelocity;
     public float fallingVelocity;
     public float rayCastHeight = 0.5f;
+    public float groundCheckDistance = 1f;
     public LayerMask groundLayer;
 
     [Header("Movement Flags")]
@@ -42,155 +45,220 @@ public class PlayerMovement : MonoBehaviour
     public float sprintingSpeed = 7f;
 
     [Header("Jump Variables")]
-    public float jumpHeight = 4;
+    public float jumpHeight = 4f;
     public float gravityIntensity = -15f;
-
-    PhotonView view;
 
     public int playerTeam;
 
     private void Awake()
     {
         view = GetComponent<PhotonView>();
+
         currentHealth = maxHealth;
+
         animatorManager = GetComponent<AnimatorManager>();
         playerManager = GetComponent<PlayerManager>();
         inputManager = GetComponent<InputManager>();
         playerRigidBody = GetComponent<Rigidbody>();
-        cameraGameObject = Camera.main.transform;
 
-        playerControllerManager = PhotonView.Find((int)view.InstantiationData[0]).GetComponent<PlayerControllerManager>();
-
-        healthbarSlider.minValue = 0f;
-        healthbarSlider.maxValue = maxHealth;
-        healthbarSlider.value = currentHealth;
+        if (healthbarSlider != null)
+        {
+            healthbarSlider.minValue = 0f;
+            healthbarSlider.maxValue = maxHealth;
+            healthbarSlider.value = currentHealth;
+        }
     }
 
-    void Start()
+    private void Start()
     {
         if (!view.IsMine)
         {
-            Destroy(playerRigidBody);
-            Destroy(playerUI);
+            if (playerRigidBody != null)
+                Destroy(playerRigidBody);
+
+            if (playerUI != null)
+                Destroy(playerUI);
+
+            return;
         }
 
-        if (view.Owner.CustomProperties.ContainsKey("Team"))
+        if (playerManager != null &&
+            playerManager.CameraManager != null)
         {
-            int team = (int)view.Owner.CustomProperties["Team"];
-            playerTeam = team;
+            cameraGameObject = playerManager.CameraManager.CameraTransform;
         }
 
-        RectTransform crossHairRectTransform = crossHairUI.GetComponent<RectTransform>();
-        crossHairRectTransform.sizeDelta = new Vector2(crossHairRectTransform.sizeDelta.x, 200);
+        if (cameraGameObject == null)
+            Debug.LogError("Local player camera reference is missing.");
 
-        Debug.Log("Crosshair Height Set to: " + crossHairRectTransform.rect.height);
+        if (view.Owner != null &&
+            view.Owner.CustomProperties.TryGetValue("Team", out object teamValue))
+        {
+            playerTeam = (int)teamValue;
+        }
+
+        if (crossHairUI != null)
+        {
+            RectTransform crossHairRectTransform =
+                crossHairUI.GetComponent<RectTransform>();
+
+            if (crossHairRectTransform != null)
+            {
+                crossHairRectTransform.sizeDelta = new Vector2(
+                    crossHairRectTransform.sizeDelta.x,
+                    200f
+                );
+            }
+        }
+
+        if (view.InstantiationData != null &&
+            view.InstantiationData.Length > 0)
+        {
+            PhotonView controllerView =
+                PhotonView.Find((int)view.InstantiationData[0]);
+
+            if (controllerView != null)
+                playerControllerManager =
+                    controllerView.GetComponent<PlayerControllerManager>();
+        }
+
+        if (playerControllerManager == null)
+            Debug.LogError("PlayerControllerManager reference could not be found.");
     }
 
     public void HandleAllMovement()
     {
+        if (!view.IsMine || playerRigidBody == null)
+            return;
+
         if (Input.GetKey(KeyCode.Escape))
         {
-            healthAndCrosshair.SetActive(false);
-        }
-        else
-        {
-            healthAndCrosshair.SetActive(true);
-            HandleFallingAndLanding();
-            if (playerManager.isInteracting)
-            {
-                return;
-            }
-            HandleMovement();
-            HandleRotation();
-        }
-    }
+            if (healthAndCrosshair != null)
+                healthAndCrosshair.SetActive(false);
 
-    void HandleMovement()
-    {
-        if (isJumping)
+            return;
+        }
+
+        if (healthAndCrosshair != null)
+            healthAndCrosshair.SetActive(true);
+
+        HandleFallingAndLanding();
+
+        if (playerManager != null && playerManager.isInteracting)
             return;
 
-        movedir = new Vector3(cameraGameObject.forward.x, 0f, cameraGameObject.forward.z) * inputManager.verticalInput;
-        movedir = movedir + cameraGameObject.right * inputManager.horizontalInput;
+        HandleMovement();
+        HandleRotation();
+    }
+
+    private void HandleMovement()
+    {
+        if (isJumping || cameraGameObject == null)
+            return;
+
+        Vector3 forward = cameraGameObject.forward;
+        forward.y = 0f;
+        forward.Normalize();
+
+        Vector3 right = cameraGameObject.right;
+        right.y = 0f;
+        right.Normalize();
+
+        movedir = forward * inputManager.verticalInput +
+                  right * inputManager.horizontalInput;
+
         movedir.Normalize();
 
-        movedir.y = 0;
+        isMoving = inputManager.movementAmount > 0.01f;
 
-        if (isSprinting)
-        {
-            movedir = movedir * sprintingSpeed;
-        }
-        else
-        {
-            if (inputManager.movementAmount >= 0.5f)
-            {
-                movedir = movedir * movementSpeed;
-                isMoving = true;
-            }
+        float speed = isSprinting ? sprintingSpeed : movementSpeed;
 
-            if (inputManager.movementAmount <= 0f)
-            {
-                isMoving = false;
-            }
-        }
+        Vector3 movementVelocity = movedir * speed;
 
-        Vector3 movementVelocity = movedir;
-        playerRigidBody.velocity = movementVelocity;
+        Vector3 currentVelocity = playerRigidBody.velocity;
+
+        playerRigidBody.velocity = new Vector3(
+            movementVelocity.x,
+            currentVelocity.y,
+            movementVelocity.z
+        );
     }
 
-    void HandleRotation()
+    private void HandleRotation()
     {
-        if (isJumping)
+        if (isJumping || cameraGameObject == null)
             return;
 
-        Vector3 targetDir = Vector3.zero;
+        Vector3 targetDir =
+            cameraGameObject.forward * inputManager.verticalInput +
+            cameraGameObject.right * inputManager.horizontalInput;
 
-        targetDir = cameraGameObject.forward * inputManager.verticalInput;
-        targetDir = targetDir + cameraGameObject.right * inputManager.horizontalInput;
+        targetDir.y = 0f;
+
+        if (targetDir.sqrMagnitude < 0.001f)
+            return;
+
         targetDir.Normalize();
-        targetDir.y = 0;
-
-        if (targetDir == Vector3.zero)
-        {
-            targetDir = transform.forward;
-        }
 
         Quaternion targetRotation = Quaternion.LookRotation(targetDir);
-        Quaternion playerRotation = Quaternion.Slerp(transform.rotation, targetRotation, rotationSpeed * Time.deltaTime);
 
-        transform.rotation = playerRotation;
+        transform.rotation = Quaternion.Slerp(
+            transform.rotation,
+            targetRotation,
+            rotationSpeed * Time.deltaTime
+        );
     }
 
-    void HandleFallingAndLanding()
+    private void HandleFallingAndLanding()
     {
         RaycastHit hit;
+
         Vector3 rayCastOrigin = transform.position;
-        Vector3 targetPosition;
-        rayCastOrigin.y = rayCastOrigin.y + rayCastHeight;
-        targetPosition = transform.position;
+        rayCastOrigin.y += rayCastHeight;
+
+        Vector3 targetPosition = transform.position;
 
         if (!isGrounded && !isJumping)
         {
-            if (!playerManager.isInteracting)
+            if (playerManager != null &&
+                !playerManager.isInteracting)
             {
                 animatorManager.PlayTargetAnim("Falling", true);
             }
 
-            inAirTimer = inAirTimer + Time.deltaTime;
-            playerRigidBody.AddForce(transform.forward * leapingVelocity);
-            playerRigidBody.AddForce(-Vector3.up * fallingVelocity * inAirTimer);
+            inAirTimer += Time.deltaTime;
+
+            playerRigidBody.AddForce(
+                transform.forward * leapingVelocity
+            );
+
+            playerRigidBody.AddForce(
+                Vector3.down * fallingVelocity * inAirTimer
+            );
         }
 
-        if (Physics.SphereCast(rayCastOrigin, 0.2f, -Vector3.up, out hit, 1f, groundLayer))
+        bool groundHit = Physics.SphereCast(
+            rayCastOrigin,
+            0.2f,
+            Vector3.down,
+            out hit,
+            groundCheckDistance,
+            groundLayer,
+            QueryTriggerInteraction.Ignore
+        );
+
+        if (groundHit)
         {
-            if (!isGrounded && !playerManager.isInteracting)
+            if (!isGrounded &&
+                playerManager != null &&
+                !playerManager.isInteracting)
             {
                 animatorManager.PlayTargetAnim("Landing", true);
             }
 
-            Vector3 rayCastHitPoint = hit.point;
-            targetPosition.y = rayCastHitPoint.y;
-            inAirTimer = 0;
+            targetPosition.y = hit.point.y;
+
+            inAirTimer = 0f;
             isGrounded = true;
         }
         else
@@ -200,9 +268,15 @@ public class PlayerMovement : MonoBehaviour
 
         if (isGrounded && !isJumping)
         {
-            if (playerManager.isInteracting || inputManager.movementAmount > 0)
+            if (playerManager != null &&
+                playerManager.isInteracting ||
+                inputManager.movementAmount > 0f)
             {
-                transform.position = Vector3.Lerp(transform.position, targetPosition, Time.deltaTime / 0.1f);
+                transform.position = Vector3.Lerp(
+                    transform.position,
+                    targetPosition,
+                    Time.deltaTime / 0.1f
+                );
             }
             else
             {
@@ -213,50 +287,59 @@ public class PlayerMovement : MonoBehaviour
 
     public void HandleJumping()
     {
-        if (isGrounded)
-        {
-            animatorManager.animator.SetBool("isJumping", true);
-            animatorManager.PlayTargetAnim("Jump", false);
+        if (!view.IsMine || !isGrounded || isJumping)
+            return;
 
-            float jumpingVelocity = Mathf.Sqrt(-2 * gravityIntensity * jumpHeight);
-            Vector3 playerVelocity = movedir;
-            playerVelocity.y = jumpingVelocity;
-            playerRigidBody.velocity = playerVelocity;
+        isJumping = true;
 
-            isJumping = false;
-        }
+        animatorManager.animator.SetBool("isJumping", true);
+        animatorManager.PlayTargetAnim("Jump", false);
+
+        float jumpingVelocity = Mathf.Sqrt(
+            -2f * gravityIntensity * jumpHeight
+        );
+
+        Vector3 playerVelocity = playerRigidBody.velocity;
+        playerVelocity.x = movedir.x;
+        playerVelocity.z = movedir.z;
+        playerVelocity.y = jumpingVelocity;
+
+        playerRigidBody.velocity = playerVelocity;
+        isGrounded = false;
     }
 
-    public void SetIsJumping(bool isJumping)
+    public void SetIsJumping(bool value)
     {
-        this.isJumping = isJumping;
+        isJumping = value;
     }
 
     public void ApplyDamage(float damageValue)
     {
-        view.RPC("RPC_TakeDamage", RpcTarget.All, damageValue);
+        if (view.IsMine)
+            view.RPC("RPC_TakeDamage", RpcTarget.All, damageValue);
     }
 
     [PunRPC]
-    void RPC_TakeDamage(float damage)
+    private void RPC_TakeDamage(float damage)
     {
         if (!view.IsMine)
             return;
-        currentHealth -= damage;
-        healthbarSlider.value = currentHealth;
-        if (currentHealth <= 0)
-        {
-            Die();
-        }
 
-        Debug.Log("Damage Taken " + damage);
-        Debug.Log("Current Taken " + currentHealth);
+        currentHealth = Mathf.Max(0f, currentHealth - damage);
+
+        if (healthbarSlider != null)
+            healthbarSlider.value = currentHealth;
+
+        if (currentHealth <= 0f)
+            Die();
     }
 
     private void Die()
     {
-        playerControllerManager.Die();
+        if (playerControllerManager != null)
+            playerControllerManager.Die();
 
-        ScoreBoard.instance.PlayerDied(playerTeam);
+        if (ScoreBoard.instance != null)
+            ScoreBoard.instance.PlayerDied(playerTeam);
     }
 }
